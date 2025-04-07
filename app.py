@@ -8,6 +8,12 @@ from datetime import datetime
 app = Flask(__name__)
 DB_NAME = "messages.db"
 
+init_db()  # ← تشغيل الإنشاء مباشرة هنا
+
+model = joblib.load("intent_model.pkl")
+vectorizer = joblib.load("vectorizer.pkl")
+
+
 model = joblib.load("intent_model.pkl")
 vectorizer = joblib.load("vectorizer.pkl")
 
