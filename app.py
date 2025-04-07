@@ -50,6 +50,16 @@ ORDER_LOOKUP_RESPONSES = {
     'en': "Your order number was sent to your email. If you didn't receive it, please send me the phone number used in the order and I’ll help you further."
 }
 
+NO_ORDER_PHRASES = [
+    'ما عندي رقم',
+    'ما وصلني رقم الطلب',
+    'ماوصلني رقم طلب',
+    'وين احصل رقم طلب',
+    'ما جاني رقم',
+    'ما حصلت رقم الطلب',
+    'ما شفت رقم الطلب'
+]
+
 @app.route("/bot", methods=['POST'])
 def bot():
     print("🚀 /bot endpoint was hit")
@@ -78,7 +88,7 @@ def bot():
     response_sent = False
 
     if state == "awaiting_order_number":
-        if any(phrase in incoming_msg.lower() for phrase in ['ما عندي رقم', 'ما وصلني رقم الطلب']):
+        if any(phrase in incoming_msg.lower() for phrase in NO_ORDER_PHRASES):
             msg.body(ORDER_LOOKUP_RESPONSES[lang])
             c.execute("DELETE FROM sessions WHERE sender = ?", (sender,))
             response_sent = True
