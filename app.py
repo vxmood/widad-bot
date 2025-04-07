@@ -58,9 +58,12 @@ def bot():
     resp = MessagingResponse()
     msg = resp.message()
 
-    # رد خاص لسؤال رقم الطلب
-    if any(phrase in incoming_msg.lower() for phrase in ['رقم الطلب', 'وين رقم الطلب', 'كيف أطلع رقم', 'وين طلبي']):
+    # رد خاص لسيناريو ما عنده رقم طلب
+    if any(phrase in incoming_msg.lower() for phrase in ['ما عندي رقم', 'ما وصلني رقم الطلب']):
         msg.body(ORDER_LOOKUP_RESPONSES[lang])
+    # رد خاص لسؤال رقم الطلب
+    elif any(phrase in incoming_msg.lower() for phrase in ['رقم الطلب', 'وين رقم الطلب', 'كيف أطلع رقم', 'وين طلبي']):
+        msg.body(ORDER_REQUEST_MESSAGES[lang])
     elif incoming_msg.lower() in ['hi', 'hello', 'مرحبا', 'السلام عليكم']:
         msg.body(f"{WELCOME_MESSAGES[lang]}\n{HELP_MESSAGES[lang]}")
     elif 'طلب' in incoming_msg or 'order' in incoming_msg.lower():
