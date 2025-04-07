@@ -1,5 +1,0 @@
-flask
-twilio
-joblib
-scikit-learn
-pandas
