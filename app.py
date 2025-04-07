@@ -57,7 +57,17 @@ NO_ORDER_PHRASES = [
     'وين احصل رقم طلب',
     'ما جاني رقم',
     'ما حصلت رقم الطلب',
-    'ما شفت رقم الطلب'
+    'ما شفت رقم الطلب',
+    'ما وصلني رقم طلبي',
+    'ماوصلني رقم طلبي',
+    'ما وصلي رقم طلب',
+    'ماوصلي رقم طلب',
+    'ما وصلي رقم',
+    'ماوصلني رقم'
+]
+
+TRACKING_REQUEST_PHRASES = [
+    'عندي طلب', 'أريد متابعة', 'ابي اتابع طلبي', 'ابي اعرف طلبي', 'وين طلبي', 'وين طلبي؟', 'وين طلبي الان'
 ]
 
 @app.route("/bot", methods=['POST'])
@@ -84,7 +94,7 @@ def bot():
     row = c.fetchone()
     state = row[0] if row else None
 
-    # تحديث الحالة بناءً على الرسالة
+    # تحديث الحالة والرد حسب الجلسة
     response_sent = False
 
     if state == "awaiting_order_number":
@@ -92,10 +102,12 @@ def bot():
             msg.body(ORDER_LOOKUP_RESPONSES[lang])
             c.execute("DELETE FROM sessions WHERE sender = ?", (sender,))
             response_sent = True
+        else:
+            msg.body(ORDER_REQUEST_MESSAGES[lang])
+            response_sent = True
 
     if not response_sent:
-        # إذا الزبون سأل عن طلبه، نبدأ جلسة طلب الرقم
-        if any(phrase in incoming_msg.lower() for phrase in ['عندي طلب', 'أريد متابعة', 'ابي اتابع طلبي', 'ابي اعرف طلبي', 'وين طلبي']):
+        if any(phrase in incoming_msg.lower() for phrase in TRACKING_REQUEST_PHRASES):
             msg.body(ORDER_REQUEST_MESSAGES[lang])
             c.execute("INSERT OR REPLACE INTO sessions (sender, state) VALUES (?, ?)", (sender, "awaiting_order_number"))
         elif incoming_msg.lower() in ['hi', 'hello', 'مرحبا', 'السلام عليكم']:
