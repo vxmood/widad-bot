@@ -27,6 +27,7 @@ messages_store = []
 
 @app.route("/bot", methods=['POST'])
 def bot():
+    print("🚀 /bot endpoint was hit")
     incoming_msg = request.values.get('Body', '').strip()
     print("📥 Received message:", incoming_msg)
 
@@ -53,5 +54,3 @@ def bot():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
-
-
