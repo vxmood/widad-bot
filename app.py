@@ -18,8 +18,12 @@ def init_db():
             sender TEXT,
             message TEXT,
             date TEXT
-        )
-    ''')
+        )''')
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS sessions (
+            sender TEXT PRIMARY KEY,
+            state TEXT
+        )''')
     conn.commit()
     conn.close()
 
@@ -37,8 +41,8 @@ HELP_MESSAGES = {
 }
 
 ORDER_REQUEST_MESSAGES = {
-    'ar': "يرجى تزويدنا برقم الطلب للمتابعة. شكراً لك!",
-    'en': "Please provide your order number so we can follow up. Thank you!"
+    'ar': "يرجى تزويدنا برقم الطلب للمتابعة.",
+    'en': "Please provide your order number so we can follow up."
 }
 
 ORDER_LOOKUP_RESPONSES = {
@@ -58,25 +62,39 @@ def bot():
     resp = MessagingResponse()
     msg = resp.message()
 
-    # رد خاص لسيناريو ما عنده رقم طلب
-    if any(phrase in incoming_msg.lower() for phrase in ['ما عندي رقم', 'ما وصلني رقم الطلب']):
-        msg.body(ORDER_LOOKUP_RESPONSES[lang])
-    # رد خاص لسؤال رقم الطلب
-    elif any(phrase in incoming_msg.lower() for phrase in ['رقم الطلب', 'وين رقم الطلب', 'كيف أطلع رقم', 'وين طلبي']):
-        msg.body(ORDER_REQUEST_MESSAGES[lang])
-    elif incoming_msg.lower() in ['hi', 'hello', 'مرحبا', 'السلام عليكم']:
-        msg.body(f"{WELCOME_MESSAGES[lang]}\n{HELP_MESSAGES[lang]}")
-    elif 'طلب' in incoming_msg or 'order' in incoming_msg.lower():
-        msg.body(ORDER_REQUEST_MESSAGES[lang])
-    else:
-        # حفظ الرسالة في قاعدة البيانات
-        conn = sqlite3.connect(DB_NAME)
-        c = conn.cursor()
-        c.execute("INSERT INTO messages (sender, message, date) VALUES (?, ?, ?)",
-                  (sender, incoming_msg, datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
-        conn.commit()
-        conn.close()
-        msg.body(HELP_MESSAGES[lang])
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+
+    # حفظ الرسالة
+    c.execute("INSERT INTO messages (sender, message, date) VALUES (?, ?, ?)",
+              (sender, incoming_msg, datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
+
+    # الحصول على حالة الجلسة
+    c.execute("SELECT state FROM sessions WHERE sender = ?", (sender,))
+    row = c.fetchone()
+    state = row[0] if row else None
+
+    # تحديث الحالة بناءً على الرسالة
+    response_sent = False
+
+    if state == "awaiting_order_number":
+        if any(phrase in incoming_msg.lower() for phrase in ['ما عندي رقم', 'ما وصلني رقم الطلب']):
+            msg.body(ORDER_LOOKUP_RESPONSES[lang])
+            c.execute("DELETE FROM sessions WHERE sender = ?", (sender,))
+            response_sent = True
+
+    if not response_sent:
+        # إذا الزبون سأل عن طلبه، نبدأ جلسة طلب الرقم
+        if any(phrase in incoming_msg.lower() for phrase in ['عندي طلب', 'أريد متابعة', 'ابي اتابع طلبي', 'ابي اعرف طلبي', 'وين طلبي']):
+            msg.body(ORDER_REQUEST_MESSAGES[lang])
+            c.execute("INSERT OR REPLACE INTO sessions (sender, state) VALUES (?, ?)", (sender, "awaiting_order_number"))
+        elif incoming_msg.lower() in ['hi', 'hello', 'مرحبا', 'السلام عليكم']:
+            msg.body(f"{WELCOME_MESSAGES[lang]}\n{HELP_MESSAGES[lang]}")
+        else:
+            msg.body(HELP_MESSAGES[lang])
+
+    conn.commit()
+    conn.close()
 
     return str(resp)
 
