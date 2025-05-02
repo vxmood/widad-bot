@@ -2,10 +2,10 @@ from flask import Flask, request
 from twilio.twiml.messaging_response import MessagingResponse
 import joblib
 import sqlite3
-from datetime import datetime, timedelta
-import os
+from datetime import datetime
 import re
 from difflib import SequenceMatcher
+import os
 
 app = Flask(__name__)
 
@@ -18,42 +18,36 @@ except Exception as e:
     raise
 
 # إعداد قواعد البيانات
-DB_NAME = "widad_messages.db"
+DB_NAME = "widad_conversations.db"
 TRAINING_DB = "widad_training.db"
 
 RESPONSES = {
-    "ترحيب": "مرحباً بك في الوداد للعطور! 🌹 كيف أقدر أساعدك؟",
-    "طلب": "يرجى تزويدنا برقم الطلب للمتابعة. شكرًا لك!",
-    "ماعندي_رقم_طلب": "رقم الطلب تم إرساله عبر الإيميل. إذا لم يصلك، يرجى تزويدنا برقم الهاتف المسجل في الطلب للمتابعة.",
-    "وين_أحصل_رقم_طلب": "يمكنك العثور على رقم الطلب في الإيميل الذي استخدمته أثناء الطلب. إذا لم يصلك، تواصل معنا برقم الهاتف المسجل وسنساعدك!",
-    "فرع": """تفضل بزيارتنا في أقرب فرع لديك 🚗:
-    
-• سوق بركاء
-• سيتي سنتر مسقط (الموالح)
-• الموالح (بجانب سيتي سنتر بمحطة شل)
+    "ترحيب": "مرحباً بك في الوداد للعطور! 🌹 كيف أقدر أساعدك اليوم؟",
+    "طلب": "للمساعدة في متابعة طلبك، يرجى إرسال رقم الطلب.",
+    "ماعندي_رقم_طلب": "يمكنك العثور على رقم الطلب في رسالة التأكيد المرسلة إليك. إذا لم تصلك، يرجى إرسال رقم هاتفك المسجل وسنساعدك.",
+    "وين_أحصل_رقم_طلب": "رقم الطلب موجود في:\n1. رسالة التأكيد على الإيميل\n2. رسالة SMS إن كنت مسجلاً بالواتساب\n3. في تطبيقنا إذا كنت تستخدمه",
+    "فرع": """أقرب فروعنا لك 🚗:
+
+📍 مسقط:
+• سيتي سنتر (الموالح)
 • مسقط مول
-• العذيبة (بعد أبراج الصحوة بجانب كنتاكي)
+• العذيبة (بجانب كنتاكي)
+
+📍 خارج مسقط:
 • نزوى جراند مول
-• عمان مول
 • السويق
+• سوق بركاء
 
 ⏰ أوقات العمل:
-طيلة أيام الأسبوع ما عدا الجمعة
-10 ص إلى 1:30 م | 4:30 م إلى 10:00 م
-
-يوم الجمعة:
-4:30 م إلى 10:00 م
-
-المجمعات التجارية:
-طيلة أيام الأسبوع 10:00 ص إلى 10:00 م
-الخميس والجمعة حتى 12:00 بعد منتصف الليل""",
-    "شكر": "شكرًا لتواصلك معنا في الوداد للعطور 🌹 نحن دائماً في خدمتك.",
-    "default": "كيف أقدر أساعدك؟"
+الأحد-الخميس: 10 ص - 10 م
+الجمعة: 4 م - 10 م""",
+    "شكر": "شكراً لثقتك بنا 🌹 نرحب بك دائماً في متاجر الوداد للعطور.",
+    "default": "عذراً، لم أفهم استفسارك. يمكنك اختيار:\n1. متابعة طلب\n2. معرفة الفروع\n3. أسئلة عامة"
 }
 
 # أنماط الكلام
-GREETINGS = ["السلام عليكم", "هلا", "مرحبا", "أهلاً"]
-THANKS = ["شكرا", "شكرًا", "مشكووور", "مشكور"]
+GREETINGS = ["السلام عليكم", "هلا", "مرحبا", "أهلاً", "السلام"]
+THANKS = ["شكرا", "شكرًا", "مشكور", "يعطيك العافية"]
 ORDER_PATTERNS = [
     r"رقم الطلب",
     r"الطلب رقم",
@@ -61,28 +55,32 @@ ORDER_PATTERNS = [
     r"رقم\s*\d+"
 ]
 
-# تحسين قاعدة البيانات
-def init_db():
+# تهيئة قواعد البيانات
+def init_databases():
     for db_name in [DB_NAME, TRAINING_DB]:
         conn = sqlite3.connect(db_name)
         c = conn.cursor()
-        c.execute('''CREATE TABLE IF NOT EXISTS sessions (
-            phone TEXT PRIMARY KEY, 
-            last_seen TEXT,
-            context TEXT
+        
+        c.execute('''CREATE TABLE IF NOT EXISTS conversations (
+            phone TEXT PRIMARY KEY,
+            last_intent TEXT,
+            last_message TEXT,
+            timestamp TEXT
         )''')
-        c.execute('''CREATE TABLE IF NOT EXISTS training_data (
+        
+        c.execute('''CREATE TABLE IF NOT EXISTS training_logs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             phone TEXT,
             message TEXT,
-            predicted_intent TEXT,
+            intent TEXT,
             confidence REAL,
             timestamp TEXT
         )''')
+        
         conn.commit()
         conn.close()
 
-init_db()
+init_databases()
 
 # تحليل النية مع الثقة
 def predict_intent(text):
@@ -96,20 +94,37 @@ def predict_intent(text):
         print(f"⚠️ Prediction error: {e}")
         return "default", 0.0
 
-# ذاكرة المحادثة
-def get_context(phone):
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    context = c.execute('''SELECT context FROM sessions WHERE phone = ?''', (phone,)).fetchone()
-    conn.close()
-    return context[0] if context else None
+# مقارنة النصوص
+def text_similarity(a, b, threshold=0.7):
+    return SequenceMatcher(None, a.lower(), b.lower()).ratio() >= threshold
 
-def update_context(phone, context):
+# إدارة المحادثة
+def get_conversation(phone):
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
-    c.execute('''INSERT OR REPLACE INTO sessions (phone, last_seen, context) 
-                 VALUES (?, ?, ?)''', 
-              (phone, datetime.now().strftime('%Y-%m-%d %H:%M:%S'), context))
+    c.execute('''SELECT last_intent, last_message FROM conversations WHERE phone = ?''', (phone,))
+    result = c.fetchone()
+    conn.close()
+    return result if result else (None, None)
+
+def update_conversation(phone, intent, message):
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute('''INSERT OR REPLACE INTO conversations 
+                 (phone, last_intent, last_message, timestamp)
+                 VALUES (?, ?, ?, ?)''',
+              (phone, intent, message, datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
+    conn.commit()
+    conn.close()
+
+# تسجيل التدريب
+def log_interaction(phone, message, intent, confidence):
+    conn = sqlite3.connect(TRAINING_DB)
+    c = conn.cursor()
+    c.execute('''INSERT INTO training_logs 
+                 (phone, message, intent, confidence, timestamp)
+                 VALUES (?, ?, ?, ?, ?)''',
+              (phone, message, intent, confidence, datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
     conn.commit()
     conn.close()
 
@@ -117,68 +132,56 @@ def update_context(phone, context):
 def handle_order_request(phone, message):
     order_num = re.search(r'\d{5,}', message)
     if order_num:
-        update_context(phone, f"order_{order_num.group()}")
-        return f"تم تسجيل طلبك رقم {order_num.group()}. سيتم متابعته خلال 24 ساعة."
+        update_conversation(phone, "طلب", f"order_{order_num.group()}")
+        return "تم استلام رقم الطلب. سيصلك تحديث الحالة خلال 24 ساعة."
     return RESPONSES["طلب"]
-
-# تحسين التعرف على الكلام
-def text_similarity(a, b):
-    return SequenceMatcher(None, a.lower(), b.lower()).ratio()
 
 @app.route("/bot", methods=["POST"])
 def bot():
     incoming_msg = request.values.get("Body", "").strip()
     sender = request.values.get("From", "")
-    print(f"📩 {sender[:5]}...: {incoming_msg}")
-
-    # تحديد الهوية
-    phone = re.sub(r'\D', '', sender)[-9:]  # أخر 9 أرقام
-
-    # التحقق من المحادثات السابقة
-    context = get_context(phone)
+    phone = re.sub(r'\D', '', sender)[-9:]  # أخذ آخر 9 أرقام
     
-    # معالجة خاصة بناءً على السياق
-    if context and context.startswith("order_"):
-        order_num = context.split("_")[1]
-        update_context(phone, None)
-        return str(MessagingResponse().message(
-            f"شكرًا لمتابعة طلبك رقم {order_num}. تم تحديث حالة الطلب."
-        ))
-
+    print(f"📩 رسالة من {phone}: {incoming_msg}")
+    
+    # استعادة آخر محادثة
+    last_intent, last_message = get_conversation(phone)
+    
+    # التحقق من التحية
+    if (not last_intent) or any(text_similarity(incoming_msg, g) for g in GREETINGS):
+        update_conversation(phone, "ترحيب", incoming_msg)
+        return str(MessagingResponse().message(RESPONSES["ترحيب"]))
+    
     # تحليل النية
     intent, confidence = predict_intent(incoming_msg)
-    reply = RESPONSES.get(intent, RESPONSES["default"])
-
-    # معالجة خاصة للطلبات
-    if any(re.search(pattern, incoming_msg) for pattern in ORDER_PATTERNS):
+    
+    # معالجة خاصة لأنواع الطلبات
+    if any(re.search(p, incoming_msg) for p in ORDER_PATTERNS):
         reply = handle_order_request(phone, incoming_msg)
-    elif any(text_similarity(incoming_msg, g) > 0.8 for g in GREETINGS):
-        reply = RESPONSES["ترحيب"]
-        intent = "ترحيب"
-    elif any(text_similarity(incoming_msg, t) > 0.7 for t in THANKS):
+    elif any(text_similarity(incoming_msg, t) for t in THANKS):
         reply = RESPONSES["شكر"]
         intent = "شكر"
-
-    # تسجيل البيانات
-    try:
-        conn = sqlite3.connect(TRAINING_DB)
-        c = conn.cursor()
-        c.execute('''INSERT INTO training_data 
-                    (phone, message, predicted_intent, confidence, timestamp)
-                    VALUES (?, ?, ?, ?, ?)''',
-                 (phone, incoming_msg, intent, confidence, datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
-        conn.commit()
-        conn.close()
-    except Exception as e:
-        print(f"❌ Database error: {e}")
-
-    # الرد الذكي
+    elif intent == "فرع" or "فرع" in incoming_msg:
+        reply = RESPONSES["فرع"]
+    else:
+        reply = RESPONSES.get(intent, RESPONSES["default"])
+    
+    # منع التكرار غير الضروري
+    if last_intent == intent and intent in ["فرع", "طلب"]:
+        reply = "لا تزال المعلومات نفسها. هل لديك استفسار آخر؟"
+    
+    # تحديث المحادثة
+    update_conversation(phone, intent, incoming_msg)
+    log_interaction(phone, incoming_msg, intent, confidence)
+    
+    # إعداد الرد
     resp = MessagingResponse()
     msg = resp.message()
     
-    # إضافة اقتراحات إن كانت الإجابة عامة
+    # تحسين الردود العامة
     if intent == "default":
-        msg.body(reply + "\n\nيمكنك طرح:\n- أسئلة عن الطلبات\n- استفسارات عن الفروع\n- أو أي استفسار آخر")
+        suggestions = "\n\nيمكنك اختيار:\n1. متابعة طلب\n2. مواقع الفروع\n3. التوصيل والشحن"
+        msg.body(reply + suggestions)
     else:
         msg.body(reply)
     
