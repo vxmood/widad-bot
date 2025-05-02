@@ -4,11 +4,20 @@ import joblib
 import sqlite3
 from datetime import datetime, timedelta
 import os
+import re
+from difflib import SequenceMatcher
 
 app = Flask(__name__)
 
-model = joblib.load("intent_model.pkl")
-vectorizer = joblib.load("vectorizer.pkl")
+# تحميل النماذج
+try:
+    model = joblib.load("intent_model.pkl")
+    vectorizer = joblib.load("vectorizer.pkl")
+except Exception as e:
+    print(f"❌ Error loading models: {e}")
+    raise
+
+# إعداد قواعد البيانات
 DB_NAME = "widad_messages.db"
 TRAINING_DB = "widad_training.db"
 
@@ -17,102 +26,164 @@ RESPONSES = {
     "طلب": "يرجى تزويدنا برقم الطلب للمتابعة. شكرًا لك!",
     "ماعندي_رقم_طلب": "رقم الطلب تم إرساله عبر الإيميل. إذا لم يصلك، يرجى تزويدنا برقم الهاتف المسجل في الطلب للمتابعة.",
     "وين_أحصل_رقم_طلب": "يمكنك العثور على رقم الطلب في الإيميل الذي استخدمته أثناء الطلب. إذا لم يصلك، تواصل معنا برقم الهاتف المسجل وسنساعدك!",
-    "فرع": "تفضل بزيارتنا إلى أقرب فرع لديك 🚗 :\n\n• سوق بركاء\n- سيتي سنتر مسقط (الموالح)\n• الموالح (بجانب سيتي سنتر بمحطة شل)\n• مسقط مول\n• العذيبة (بعد أبراج الصحوة بجانب كنتاكي)\n- نزوى جراند مول\n- عمان مول\n• السويق\n\n⏰ أوقات العمل:\nطيلة أيام الأسبوع ما عدا الجمعة\n10 ص إلى 1:30 م\n4:30 م إلى 10:00 م\n\nيوم الجمعة:\n4:30 م إلى 10:00 م\n\nالمجمعات التجارية:\nطيلة أيام الأسبوع\n10:00 ص إلى 10:00 م\nالخميس و الجمعة\n10:00 إلى 12:00 بعد منتصف الليل",
-    "شكر": "شكرًا لتواصلك معنا في الوداد للعطور 🌹 نحن دائماً في خدمتك. إذا احتجت أي مساعدة لا تتردد في مراسلتنا.",
+    "فرع": """تفضل بزيارتنا في أقرب فرع لديك 🚗:
+    
+• سوق بركاء
+• سيتي سنتر مسقط (الموالح)
+• الموالح (بجانب سيتي سنتر بمحطة شل)
+• مسقط مول
+• العذيبة (بعد أبراج الصحوة بجانب كنتاكي)
+• نزوى جراند مول
+• عمان مول
+• السويق
+
+⏰ أوقات العمل:
+طيلة أيام الأسبوع ما عدا الجمعة
+10 ص إلى 1:30 م | 4:30 م إلى 10:00 م
+
+يوم الجمعة:
+4:30 م إلى 10:00 م
+
+المجمعات التجارية:
+طيلة أيام الأسبوع 10:00 ص إلى 10:00 م
+الخميس والجمعة حتى 12:00 بعد منتصف الليل""",
+    "شكر": "شكرًا لتواصلك معنا في الوداد للعطور 🌹 نحن دائماً في خدمتك.",
     "default": "كيف أقدر أساعدك؟"
 }
 
-GREETINGS = ["السلام عليكم", "هلا", "مرحبا", "أهلاً", "هلا!", "مرحبا!"]
+# أنماط الكلام
+GREETINGS = ["السلام عليكم", "هلا", "مرحبا", "أهلاً"]
 THANKS = ["شكرا", "شكرًا", "مشكووور", "مشكور"]
+ORDER_PATTERNS = [
+    r"رقم الطلب",
+    r"الطلب رقم",
+    r"طلب رقم",
+    r"رقم\s*\d+"
+]
 
-# تخزين بيانات التدريب
-def log_training_data(phone, message, predicted_intent):
-    try:
-        conn = sqlite3.connect(TRAINING_DB)
+# تحسين قاعدة البيانات
+def init_db():
+    for db_name in [DB_NAME, TRAINING_DB]:
+        conn = sqlite3.connect(db_name)
         c = conn.cursor()
-        c.execute('''
-            CREATE TABLE IF NOT EXISTS training_data (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                phone TEXT,
-                message TEXT,
-                predicted_intent TEXT,
-                timestamp TEXT
-            )
-        ''')
-        c.execute('''
-            INSERT INTO training_data (phone, message, predicted_intent, timestamp)
-            VALUES (?, ?, ?, ?)
-        ''', (phone, message, predicted_intent, datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
+        c.execute('''CREATE TABLE IF NOT EXISTS sessions (
+            phone TEXT PRIMARY KEY, 
+            last_seen TEXT,
+            context TEXT
+        )''')
+        c.execute('''CREATE TABLE IF NOT EXISTS training_data (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            phone TEXT,
+            message TEXT,
+            predicted_intent TEXT,
+            confidence REAL,
+            timestamp TEXT
+        )''')
         conn.commit()
         conn.close()
-        print("✅ Training data logged.")
-    except Exception as e:
-        print("❌ Error logging training data:", e)
 
-# تخزين آخر تفاعل لكل زبون
-def update_last_interaction(phone):
+init_db()
+
+# تحليل النية مع الثقة
+def predict_intent(text):
+    try:
+        X = vectorizer.transform([text])
+        proba = model.predict_proba(X)[0]
+        max_proba = max(proba)
+        intent = model.predict(X)[0]
+        return intent, float(max_proba)
+    except Exception as e:
+        print(f"⚠️ Prediction error: {e}")
+        return "default", 0.0
+
+# ذاكرة المحادثة
+def get_context(phone):
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS sessions (phone TEXT PRIMARY KEY, last_seen TEXT)''')
-    c.execute('''REPLACE INTO sessions (phone, last_seen) VALUES (?, ?)''', (phone, datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
+    context = c.execute('''SELECT context FROM sessions WHERE phone = ?''', (phone,)).fetchone()
+    conn.close()
+    return context[0] if context else None
+
+def update_context(phone, context):
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute('''INSERT OR REPLACE INTO sessions (phone, last_seen, context) 
+                 VALUES (?, ?, ?)''', 
+              (phone, datetime.now().strftime('%Y-%m-%d %H:%M:%S'), context))
     conn.commit()
     conn.close()
 
-# التحقق من وجود محادثة سابقة
-def is_first_message(phone):
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS sessions (phone TEXT PRIMARY KEY, last_seen TEXT)''')
-    result = c.execute('''SELECT last_seen FROM sessions WHERE phone = ?''', (phone,)).fetchone()
-    conn.close()
-    return result is None
+# معالجة الطلبات
+def handle_order_request(phone, message):
+    order_num = re.search(r'\d{5,}', message)
+    if order_num:
+        update_context(phone, f"order_{order_num.group()}")
+        return f"تم تسجيل طلبك رقم {order_num.group()}. سيتم متابعته خلال 24 ساعة."
+    return RESPONSES["طلب"]
+
+# تحسين التعرف على الكلام
+def text_similarity(a, b):
+    return SequenceMatcher(None, a.lower(), b.lower()).ratio()
 
 @app.route("/bot", methods=["POST"])
 def bot():
     incoming_msg = request.values.get("Body", "").strip()
     sender = request.values.get("From", "")
-    print("📩 Received message:", incoming_msg)
+    print(f"📩 {sender[:5]}...: {incoming_msg}")
 
-    reply = RESPONSES["default"]
-    predicted_intent = ""
+    # تحديد الهوية
+    phone = re.sub(r'\D', '', sender)[-9:]  # أخر 9 أرقام
 
-    if is_first_message(sender):
+    # التحقق من المحادثات السابقة
+    context = get_context(phone)
+    
+    # معالجة خاصة بناءً على السياق
+    if context and context.startswith("order_"):
+        order_num = context.split("_")[1]
+        update_context(phone, None)
+        return str(MessagingResponse().message(
+            f"شكرًا لمتابعة طلبك رقم {order_num}. تم تحديث حالة الطلب."
+        ))
+
+    # تحليل النية
+    intent, confidence = predict_intent(incoming_msg)
+    reply = RESPONSES.get(intent, RESPONSES["default"])
+
+    # معالجة خاصة للطلبات
+    if any(re.search(pattern, incoming_msg) for pattern in ORDER_PATTERNS):
+        reply = handle_order_request(phone, incoming_msg)
+    elif any(text_similarity(incoming_msg, g) > 0.8 for g in GREETINGS):
         reply = RESPONSES["ترحيب"]
-        predicted_intent = "ترحيب"
-    elif incoming_msg.lower() in GREETINGS:
-        reply = RESPONSES["ترحيب"]
-        predicted_intent = "ترحيب"
-    elif any(thx in incoming_msg.lower() for thx in THANKS):
+        intent = "ترحيب"
+    elif any(text_similarity(incoming_msg, t) > 0.7 for t in THANKS):
         reply = RESPONSES["شكر"]
-        predicted_intent = "شكر"
-    elif "رقم" in incoming_msg and "طلب" in incoming_msg and any(word in incoming_msg for word in ["ماعندي", "ما عندي رقم"]):
-        reply = RESPONSES["ماعندي_رقم_طلب"]
-        predicted_intent = "ماعندي_رقم_طلب"
-    elif any(phrase in incoming_msg for phrase in ["وين طلبي", "وين ألقى رقمي", "وين احصل رقم طلب", "ماوصلني رقم"]):
-        reply = RESPONSES["وين_أحصل_رقم_طلب"]
-        predicted_intent = "وين_أحصل_رقم_طلب"
-    elif any(word in incoming_msg for word in ["فرع", "وين الفرع", "الفروع"]):
-        reply = RESPONSES["فرع"]
-        predicted_intent = "فرع"
-    elif "طلب" in incoming_msg:
-        reply = RESPONSES["طلب"]
-        predicted_intent = "طلب"
-    else:
-        X = vectorizer.transform([incoming_msg])
-        predicted_intent = model.predict(X)[0]
-        reply = RESPONSES.get(predicted_intent, RESPONSES["default"])
+        intent = "شكر"
 
-    # تخزين التفاعل
-    log_training_data(sender, incoming_msg, predicted_intent)
-    update_last_interaction(sender)
+    # تسجيل البيانات
+    try:
+        conn = sqlite3.connect(TRAINING_DB)
+        c = conn.cursor()
+        c.execute('''INSERT INTO training_data 
+                    (phone, message, predicted_intent, confidence, timestamp)
+                    VALUES (?, ?, ?, ?, ?)''',
+                 (phone, incoming_msg, intent, confidence, datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"❌ Database error: {e}")
 
-    # إرسال الرد
+    # الرد الذكي
     resp = MessagingResponse()
     msg = resp.message()
-    msg.body(reply)
+    
+    # إضافة اقتراحات إن كانت الإجابة عامة
+    if intent == "default":
+        msg.body(reply + "\n\nيمكنك طرح:\n- أسئلة عن الطلبات\n- استفسارات عن الفروع\n- أو أي استفسار آخر")
+    else:
+        msg.body(reply)
+    
     return str(resp)
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
-
+    app.run(host="0.0.0.0", port=port, debug=True)
