@@ -17,15 +17,13 @@ except Exception as e:
     print(f"❌ Error loading models: {e}")
     raise
 
-# إعداد قواعد البيانات
-DB_NAME = "widad_conversations.db"
-TRAINING_DB = "widad_training.db"
+# إعدادات التطبيق
+DB_NAME = "widad_conversations_v2.db"
+TRAINING_DB = "widad_training_v2.db"
 
 RESPONSES = {
-    "ترحيب": "مرحباً بك في الوداد للعطور! 🌹 كيف أقدر أساعدك اليوم؟",
-    "طلب": "للمساعدة في متابعة طلبك، يرجى إرسال رقم الطلب.",
-    "ماعندي_رقم_طلب": "يمكنك العثور على رقم الطلب في رسالة التأكيد المرسلة إليك. إذا لم تصلك، يرجى إرسال رقم هاتفك المسجل وسنساعدك.",
-    "وين_أحصل_رقم_طلب": "رقم الطلب موجود في:\n1. رسالة التأكيد على الإيميل\n2. رسالة SMS إن كنت مسجلاً بالواتساب\n3. في تطبيقنا إذا كنت تستخدمه",
+    "ترحيب": "مرحباً بك في متاجر الوداد للعطور! 🌹\nكيف يمكنني مساعدتك اليوم؟",
+    "طلب": "لمتابعة طلبك، يرجى إرسال رقم الطلب المكون من 5 أرقام أو أكثر.",
     "فرع": """أقرب فروعنا لك 🚗:
 
 📍 مسقط:
@@ -41,51 +39,46 @@ RESPONSES = {
 ⏰ أوقات العمل:
 الأحد-الخميس: 10 ص - 10 م
 الجمعة: 4 م - 10 م""",
-    "شكر": "شكراً لثقتك بنا 🌹 نرحب بك دائماً في متاجر الوداد للعطور.",
-    "default": "عذراً، لم أفهم استفسارك. يمكنك اختيار:\n1. متابعة طلب\n2. معرفة الفروع\n3. أسئلة عامة"
+    "default": "عذراً لم أفهم طلبك. الرجاء اختيار:\n1. متابعة طلب\n2. مواقع الفروع\n3. أسئلة عامة"
 }
 
-# أنماط الكلام
-GREETINGS = ["السلام عليكم", "هلا", "مرحبا", "أهلاً", "السلام"]
-THANKS = ["شكرا", "شكرًا", "مشكور", "يعطيك العافية"]
-ORDER_PATTERNS = [
-    r"رقم الطلب",
-    r"الطلب رقم",
-    r"طلب رقم",
-    r"رقم\s*\d+"
-]
+# ثوابت التحكم
+MIN_CONFIDENCE = 0.65
+GREETINGS = ["السلام عليكم", "مرحبا", "اهلا", "هلا", "السلام"]
+TWILIO_SANDBOX_MSGS = ["You are all set!", "Twilio Sandbox:"]
 
 # تهيئة قواعد البيانات
-def init_databases():
-    for db_name in [DB_NAME, TRAINING_DB]:
-        conn = sqlite3.connect(db_name)
-        c = conn.cursor()
-        
-        c.execute('''CREATE TABLE IF NOT EXISTS conversations (
+def init_db():
+    with sqlite3.connect(DB_NAME) as conn:
+        conn.execute('''CREATE TABLE IF NOT EXISTS users (
             phone TEXT PRIMARY KEY,
             last_intent TEXT,
-            last_message TEXT,
-            timestamp TEXT
+            created_at TEXT,
+            updated_at TEXT
         )''')
-        
-        c.execute('''CREATE TABLE IF NOT EXISTS training_logs (
+    
+    with sqlite3.connect(TRAINING_DB) as conn:
+        conn.execute('''CREATE TABLE IF NOT EXISTS messages (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             phone TEXT,
             message TEXT,
             intent TEXT,
             confidence REAL,
-            timestamp TEXT
+            created_at TEXT
         )''')
-        
-        conn.commit()
-        conn.close()
 
-init_databases()
+init_db()
 
-# تحليل النية مع الثقة
+# تحسين معالجة النص
+def clean_text(text):
+    text = re.sub(r'[^\w\s]', '', text)  # إزالة علامات الترقيم
+    return text.strip()
+
+# تحليل النية المحسنة
 def predict_intent(text):
     try:
-        X = vectorizer.transform([text])
+        cleaned_text = clean_text(text)
+        X = vectorizer.transform([cleaned_text])
         proba = model.predict_proba(X)[0]
         max_proba = max(proba)
         intent = model.predict(X)[0]
@@ -94,98 +87,76 @@ def predict_intent(text):
         print(f"⚠️ Prediction error: {e}")
         return "default", 0.0
 
-# مقارنة النصوص
-def text_similarity(a, b, threshold=0.7):
-    return SequenceMatcher(None, a.lower(), b.lower()).ratio() >= threshold
-
 # إدارة المحادثة
-def get_conversation(phone):
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    c.execute('''SELECT last_intent, last_message FROM conversations WHERE phone = ?''', (phone,))
-    result = c.fetchone()
-    conn.close()
-    return result if result else (None, None)
-
-def update_conversation(phone, intent, message):
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    c.execute('''INSERT OR REPLACE INTO conversations 
-                 (phone, last_intent, last_message, timestamp)
-                 VALUES (?, ?, ?, ?)''',
-              (phone, intent, message, datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
-    conn.commit()
-    conn.close()
-
-# تسجيل التدريب
-def log_interaction(phone, message, intent, confidence):
-    conn = sqlite3.connect(TRAINING_DB)
-    c = conn.cursor()
-    c.execute('''INSERT INTO training_logs 
-                 (phone, message, intent, confidence, timestamp)
-                 VALUES (?, ?, ?, ?, ?)''',
-              (phone, message, intent, confidence, datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
-    conn.commit()
-    conn.close()
-
-# معالجة الطلبات
-def handle_order_request(phone, message):
-    order_num = re.search(r'\d{5,}', message)
-    if order_num:
-        update_conversation(phone, "طلب", f"order_{order_num.group()}")
-        return "تم استلام رقم الطلب. سيصلك تحديث الحالة خلال 24 ساعة."
-    return RESPONSES["طلب"]
+def handle_conversation(phone, message):
+    # تجاهل رسائل ساندبوكس تويليو
+    if any(sandbox_msg in message for sandbox_msg in TWILIO_SANDBOX_MSGS):
+        return None
+        
+    # تنظيف رقم الهاتف
+    phone = re.sub(r'\D', '', phone)[-9:]
+    
+    with sqlite3.connect(DB_NAME) as conn:
+        cursor = conn.cursor()
+        
+        # التحقق من وجود المستخدم
+        user = cursor.execute('''SELECT last_intent FROM users WHERE phone = ?''', (phone,)).fetchone()
+        
+        # معالجة التحية الأولى
+        if not user or any(text.lower() in message.lower() for text in GREETINGS):
+            cursor.execute('''INSERT OR REPLACE INTO users 
+                           (phone, last_intent, created_at, updated_at)
+                           VALUES (?, ?, ?, ?)''',
+                        (phone, "ترحيب", datetime.now(), datetime.now()))
+            conn.commit()
+            return RESPONSES["ترحيب"]
+        
+        # تحليل النية
+        intent, confidence = predict_intent(message)
+        
+        # معالجة خاصة لأنواع الطلبات
+        if "فرع" in message or (intent == "فرع" and confidence >= MIN_CONFIDENCE):
+            response = RESPONSES["فرع"]
+            new_intent = "فرع"
+        elif "طلب" in message or (intent == "طلب" and confidence >= MIN_CONFIDENCE):
+            response = RESPONSES["طلب"]
+            new_intent = "طلب"
+        else:
+            response = RESPONSES["default"]
+            new_intent = "default"
+        
+        # تحديث سجل المستخدم
+        cursor.execute('''UPDATE users 
+                         SET last_intent = ?, updated_at = ?
+                         WHERE phone = ?''',
+                      (new_intent, datetime.now(), phone))
+        conn.commit()
+        
+        # تسجيل التدريب
+        with sqlite3.connect(TRAINING_DB) as training_conn:
+            training_conn.execute('''INSERT INTO messages 
+                                   (phone, message, intent, confidence, created_at)
+                                   VALUES (?, ?, ?, ?, ?)''',
+                                (phone, message, intent, confidence, datetime.now()))
+        
+        return response
 
 @app.route("/bot", methods=["POST"])
-def bot():
+def whatsapp_bot():
     incoming_msg = request.values.get("Body", "").strip()
     sender = request.values.get("From", "")
-    phone = re.sub(r'\D', '', sender)[-9:]  # أخذ آخر 9 أرقام
     
-    print(f"📩 رسالة من {phone}: {incoming_msg}")
+    print(f"📩 رسالة جديدة من {sender[:10]}...: {incoming_msg}")
     
-    # استعادة آخر محادثة
-    last_intent, last_message = get_conversation(phone)
+    response = handle_conversation(sender, incoming_msg)
     
-    # التحقق من التحية
-    if (not last_intent) or any(text_similarity(incoming_msg, g) for g in GREETINGS):
-        update_conversation(phone, "ترحيب", incoming_msg)
-        return str(MessagingResponse().message(RESPONSES["ترحيب"]))
+    if not response:
+        return "", 200  # تجاهل رسائل الساندبوكس
     
-    # تحليل النية
-    intent, confidence = predict_intent(incoming_msg)
+    twiml_response = MessagingResponse()
+    twiml_response.message(response)
     
-    # معالجة خاصة لأنواع الطلبات
-    if any(re.search(p, incoming_msg) for p in ORDER_PATTERNS):
-        reply = handle_order_request(phone, incoming_msg)
-    elif any(text_similarity(incoming_msg, t) for t in THANKS):
-        reply = RESPONSES["شكر"]
-        intent = "شكر"
-    elif intent == "فرع" or "فرع" in incoming_msg:
-        reply = RESPONSES["فرع"]
-    else:
-        reply = RESPONSES.get(intent, RESPONSES["default"])
-    
-    # منع التكرار غير الضروري
-    if last_intent == intent and intent in ["فرع", "طلب"]:
-        reply = "لا تزال المعلومات نفسها. هل لديك استفسار آخر؟"
-    
-    # تحديث المحادثة
-    update_conversation(phone, intent, incoming_msg)
-    log_interaction(phone, incoming_msg, intent, confidence)
-    
-    # إعداد الرد
-    resp = MessagingResponse()
-    msg = resp.message()
-    
-    # تحسين الردود العامة
-    if intent == "default":
-        suggestions = "\n\nيمكنك اختيار:\n1. متابعة طلب\n2. مواقع الفروع\n3. التوصيل والشحن"
-        msg.body(reply + suggestions)
-    else:
-        msg.body(reply)
-    
-    return str(resp)
+    return str(twiml_response)
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
