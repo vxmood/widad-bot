@@ -25,7 +25,6 @@ def load_ai_model():
 
         model = AutoModelForCausalLM.from_pretrained(
             model_name,
-            device_map="auto",
             low_cpu_mem_usage=True
         )
 
