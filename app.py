@@ -26,10 +26,10 @@ def load_ai_model():
 
         # تحميل النموذج بنصف دقة ووضع توفير الذاكرة
         model = AutoModelForCausalLM.from_pretrained(
-            model_name,
+            model_name,,
             torch_dtype=torch.float16,
             low_cpu_mem_usage=True,
-            device_map="auto"  # التحميل التلقائي على GPU إذا متاح
+            device_map="auto" # التحميل التلقائي على GPU إذا متاح
         )
 
         return pipeline(
