@@ -19,7 +19,6 @@ logger = logging.getLogger(__name__)
 
 # 2. تحميل نموذج الذكاء الاصطناعي بذاكرة مخفضة
 @lru_cache(maxsize=1)
-@lru_cache(maxsize=1)
 def load_ai_model():
     try:
         model_name = "aubmindlab/bert-base-arabertv02-twitter"
