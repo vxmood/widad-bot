@@ -25,12 +25,7 @@ def load_ai_model():
         tokenizer = AutoTokenizer.from_pretrained(model_name)
 
         # تحميل النموذج بنصف دقة ووضع توفير الذاكرة
-        model = AutoModelForCausalLM.from_pretrained(
-            model_name,
-            torch_dtype=torch.float16,
-            low_cpu_mem_usage=True,
-            device_map="auto" # التحميل التلقائي على GPU إذا متاح
-        )
+       model = AutoModelForCausalLM.from_pretrained(model_name)
 
         return pipeline(
             "text-generation",
