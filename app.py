@@ -20,17 +20,15 @@ logger = logging.getLogger(__name__)
 @lru_cache(maxsize=1)
 def load_ai_model():
     try:
-        model_name = "aubmindlab/bert-base-arabertv02-twitter"  # نسخة خفيفة
+        model_name = "aubmindlab/bert-base-arabertv02-twitter"
         tokenizer = AutoTokenizer.from_pretrained(model_name)
-        
+
         model = AutoModelForCausalLM.from_pretrained(
             model_name,
             device_map="auto",
-            load_in_8bit=True,  # تقليل استخدام الذاكرة
-            torch_dtype=torch.float16,
             low_cpu_mem_usage=True
         )
-        
+
         return pipeline(
             "text-generation",
             model=model,
