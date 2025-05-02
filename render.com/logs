@@ -1,0 +1,6 @@
+@app.route('/metrics')
+def metrics():
+    return jsonify({
+        "memory_usage": psutil.Process().memory_info().rss / 1024 / 1024,
+        "active_connections": len(conversation_mgr.active_sessions)
+    })
