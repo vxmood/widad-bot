@@ -16,7 +16,7 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# 2. تحميل نموذج الذكاء الاصطناعي (مع التخزين المؤقت)
+# 2. تحميل نموذج الذكاء الاصطناعي
 @lru_cache(maxsize=1)
 def load_ai_model():
     try:
@@ -38,7 +38,6 @@ def load_ai_model():
         logger.error(f"Failed to load AI model: {e}")
         raise
 
-# تعطيل الحسابات التلقائية لتوفير الذاكرة
 torch.set_grad_enabled(False)
 ai_model = load_ai_model()
 
@@ -66,7 +65,7 @@ def init_db():
 
 init_db()
 
-# 4. فئات مساعدة لإدارة المحادثة
+# 4. إدارة المحادثات
 class ConversationManager:
     def __init__(self, db_path):
         self.db_path = db_path
@@ -94,14 +93,12 @@ class ConversationManager:
 
 conversation_mgr = ConversationManager(DB_PATH)
 
-# 5. معالجة الرسائل الواردة
+# 5. المساعدات
 def preprocess_text(text):
-    """تنظيف النص المدخل"""
-    text = re.sub(r'[^\w\s\u0600-\u06FF]', '', text)  # إزالة غير الأحرف العربية
+    text = re.sub(r'[^\w\s\u0600-\u06FF]', '', text)
     return text.strip()
 
 def should_ignore(message):
-    """تجاهل رسائل النظام"""
     ignore_phrases = [
         "Twilio Sandbox:",
         "You are all set!",
@@ -110,10 +107,8 @@ def should_ignore(message):
     return any(phrase in message for phrase in ignore_phrases)
 
 def generate_ai_response(prompt, context=None):
-    """توليد رد باستخدام الذكاء الاصطناعي"""
     try:
         full_prompt = f"المحادثة السابقة:\n{context}\n\nالسؤال: {prompt}\nالجواب:" if context else prompt
-        
         response = ai_model(
             full_prompt,
             max_length=150,
@@ -122,53 +117,44 @@ def generate_ai_response(prompt, context=None):
             top_p=0.9,
             do_sample=True
         )
-        
         return response[0]['generated_text'].split("الجواب:")[-1].strip()
     except Exception as e:
         logger.error(f"AI generation error: {e}")
         return "عذرًا، حدث خطأ في معالجة طلبك. يرجى المحاولة لاحقًا."
 
-# 6. واجهة واتساب الرئيسية
+# 6. نقطة دخول واتساب
 @app.route("/whatsapp", methods=["POST"])
 def whatsapp_webhook():
     try:
-        # استقبال البيانات
         incoming_msg = request.values.get("Body", "").strip()
         sender = request.values.get("From", "")
-        
-        logger.info(f"رسالة من {sender[:10]}...: {incoming_msg}")
-        
-        # تجاهل الرسائل غير المرغوب فيها
+        logger.info(f"📩 رسالة من {sender[:10]}...: {incoming_msg}")
+
         if should_ignore(incoming_msg):
             return "", 200
-        
-        # تنظيف رقم الهاتف
-        user_id = re.sub(r'\D', '', sender)[-9:]  # أخذ آخر 9 أرقام
-        
-        # الحصول على السياق السابق
+
+        user_id = re.sub(r'\D', '', sender)[-9:]
         context = conversation_mgr.get_context(user_id)
-        
-        # توليد الرد
         cleaned_msg = preprocess_text(incoming_msg)
         bot_response = generate_ai_response(cleaned_msg, context)
-        
-        # تحديث السياق
+
         new_context = f"{context or ''}\nالمستخدم: {cleaned_msg}\nالبوت: {bot_response}"
-        conversation_mgr.update_context(user_id, new_context[-1000:])  # حفظ آخر 1000 حرف
-        
-        # تسجيل التفاعل
+        conversation_mgr.update_context(user_id, new_context[-1000:])
         conversation_mgr.log_message(user_id, incoming_msg, bot_response)
-        
-        # إرسال الرد
+
         resp = MessagingResponse()
         resp.message(bot_response)
         return str(resp)
-    
+
     except Exception as e:
         logger.error(f"Webhook error: {e}")
         return jsonify({"error": "Internal Server Error"}), 500
 
-# 7. نقاط نهاية مساعدة
+# 7. نقاط نهاية للفحص
+@app.route("/", methods=["GET"])
+def index():
+    return "Widad Bot is running. Use /whatsapp to send messages."
+
 @app.route("/health", methods=["GET"])
 def health_check():
     return jsonify({
@@ -185,7 +171,8 @@ def get_logs():
         logs = cursor.fetchall()
     return jsonify(logs)
 
-# 8. التشغيل الرئيسي
+# 8. التشغيل
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port, debug=False)  # debug=False للإنتاج
+    app.run(host="0.0.0.0", port=port)
+
