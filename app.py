@@ -120,7 +120,7 @@ def generate_ai_response(prompt, context=None):
         # إعدادات سريعة لتوليد النص مع توازن بين الجودة والسرعة
         response = ai_model(
             full_prompt,
-            max_length=100,  # تقليل الطول لتسريع العملية
+            max_length=50,  # تقليل الطول لتسريع العملية
             num_return_sequences=1,
             temperature=0.7,
             top_k=50,       # أسرع من top_p
