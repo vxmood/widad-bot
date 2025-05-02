@@ -14,4 +14,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 EXPOSE 5000
 
 # الأمر لتشغيل السيرفر
-CMD ["python", "widad_bot_final.py"]
+CMD ["python", "app.py"]
