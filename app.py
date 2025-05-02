@@ -28,6 +28,7 @@ def load_ai_model():
             device_map="auto",
             load_in_8bit=True,  # تقليل استخدام الذاكرة
             torch_dtype=torch.float16
+            low_cpu_mem_usage=True 
         )
         
         return pipeline(
