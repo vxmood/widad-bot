@@ -13,13 +13,14 @@ app = Flask(__name__)
 # 1. تحميل نموذج الذكاء الاصطناعي
 @lru_cache(maxsize=1)
 def load_ai_model():
-    model_name = "aubmindlab/bert-base-arabertv02"
+    model_name = "aubmindlab/bert-base-arabertv02-twitter"  # نسخة أخف
     tokenizer = AutoTokenizer.from_pretrained(model_name)
-    qa_pipeline = pipeline(
-        "text-generation",
-        model=model_name,
-        tokenizer=tokenizer,
-        device=0 if torch.cuda.is_available() else -1
+    model = AutoModelForCausalLM.from_pretrained(
+        model_name,
+        device_map="auto",
+        load_in_8bit=True  # تقليل استخدام الذاكرة
+    )
+    return pipeline("text-generation", model=model, tokenizer=tokenizer)
     )
     return qa_pipeline
 
