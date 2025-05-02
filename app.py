@@ -56,7 +56,6 @@ def init_db():
 
 init_db()
 
-
 def detect_intent(message):
     message = message.lower()
     if any(x in message for x in ["طلب", "أبي", "ابي", "اشتري", "شرا", "ابغى", "أريد", "اريد", "كم سعر", "كم توصل", "ارسل لي"]):
@@ -68,7 +67,6 @@ def detect_intent(message):
     if any(x in message for x in ["شكرا", "يعطيك العافية", "مشكور", "تسلم"]):
         return "شكر"
     return "عام"
-
 
 class ConversationManager:
     def __init__(self, db_path):
@@ -150,9 +148,9 @@ def whatsapp_webhook():
         if not bot_response:
             bot_response = "أهلاً وسهلاً بك في الوداد للعطور! كيف أقدر أساعدك اليوم؟"
 
-        new_context = f"{context}
+        new_context = f"""{context}
 المستخدم: {cleaned_msg}
-البوت: {bot_response}"
+البوت: {bot_response}"""
         conversation_mgr.update_context(user_id, new_context)
         conversation_mgr.log_message(user_id, incoming_msg, bot_response)
 
