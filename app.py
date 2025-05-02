@@ -107,11 +107,15 @@ def should_ignore(message):
 
 def generate_ai_response(prompt, context=None):
     try:
-        full_prompt = f"المحادثة السابقة:
+        if context:
+            full_prompt = f"""المحادثة السابقة:
 {context}
 
 السؤال: {prompt}
-الجواب:" if context else prompt
+الجواب:"""
+        else:
+            full_prompt = prompt
+
         response = ai_model(
             full_prompt,
             max_length=40,
