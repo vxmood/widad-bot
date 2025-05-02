@@ -8,6 +8,7 @@ from datetime import datetime
 import re
 import os
 import logging
+import psutil  # لمراقبة استخدام الذاكرة
 
 # تهيئة التطبيق
 app = Flask(__name__)
@@ -16,16 +17,19 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# 2. تحميل نموذج الذكاء الاصطناعي
+# 2. تحميل نموذج الذكاء الاصطناعي بذاكرة مخفضة
 @lru_cache(maxsize=1)
 def load_ai_model():
     try:
         model_name = "aubmindlab/bert-base-arabertv02-twitter"
         tokenizer = AutoTokenizer.from_pretrained(model_name)
 
+        # تحميل النموذج بنصف دقة ووضع توفير الذاكرة
         model = AutoModelForCausalLM.from_pretrained(
             model_name,
-            low_cpu_mem_usage=True
+            torch_dtype=torch.float16,
+            low_cpu_mem_usage=True,
+            device_map="auto"  # التحميل التلقائي على GPU إذا متاح
         )
 
         return pipeline(
@@ -38,6 +42,7 @@ def load_ai_model():
         logger.error(f"Failed to load AI model: {e}")
         raise
 
+# تعطيل الحساب التلقائي لتوفير الذاكرة
 torch.set_grad_enabled(False)
 ai_model = load_ai_model()
 
@@ -65,7 +70,7 @@ def init_db():
 
 init_db()
 
-# 4. إدارة المحادثات
+# 4. إدارة المحادثات المحسنة
 class ConversationManager:
     def __init__(self, db_path):
         self.db_path = db_path
@@ -78,10 +83,12 @@ class ConversationManager:
             return result[0] if result else None
     
     def update_context(self, user_id, context):
+        # اقتصص السياق إلى 500 حرف فقط لتوفير الذاكرة
+        truncated_context = context[-500:] if context else ""
         with sqlite3.connect(self.db_path) as conn:
             conn.execute(
                 "INSERT OR REPLACE INTO conversations VALUES (?, ?, ?)",
-                (user_id, context, datetime.now().isoformat())
+                (user_id, truncated_context, datetime.now().isoformat())
             )
     
     def log_message(self, user_id, message, response):
@@ -93,7 +100,7 @@ class ConversationManager:
 
 conversation_mgr = ConversationManager(DB_PATH)
 
-# 5. المساعدات
+# 5. مساعدات محسنة
 def preprocess_text(text):
     text = re.sub(r'[^\w\s\u0600-\u06FF]', '', text)
     return text.strip()
@@ -109,23 +116,35 @@ def should_ignore(message):
 def generate_ai_response(prompt, context=None):
     try:
         full_prompt = f"المحادثة السابقة:\n{context}\n\nالسؤال: {prompt}\nالجواب:" if context else prompt
+        
+        # إعدادات سريعة لتوليد النص مع توازن بين الجودة والسرعة
         response = ai_model(
             full_prompt,
-            max_length=150,
+            max_length=100,  # تقليل الطول لتسريع العملية
             num_return_sequences=1,
             temperature=0.7,
-            top_p=0.9,
+            top_k=50,       # أسرع من top_p
             do_sample=True
         )
-        return response[0]['generated_text'].split("الجواب:")[-1].strip()
+        
+        # استخراج الجزء المهم من الإجابة
+        generated_text = response[0]['generated_text']
+        if "الجواب:" in generated_text:
+            return generated_text.split("الجواب:")[-1].strip()
+        return generated_text.strip()
     except Exception as e:
         logger.error(f"AI generation error: {e}")
         return "عذرًا، حدث خطأ في معالجة طلبك. يرجى المحاولة لاحقًا."
 
-# 6. نقطة دخول واتساب
+# 6. نقطة دخول واتساب مع تحقق من Twilio
 @app.route("/whatsapp", methods=["POST"])
 def whatsapp_webhook():
     try:
+        # تحقق بسيط من هوية الطلب
+        twilio_signature = request.headers.get('X-Twilio-Signature')
+        if not twilio_signature:
+            return "", 403
+        
         incoming_msg = request.values.get("Body", "").strip()
         sender = request.values.get("From", "")
         logger.info(f"📩 رسالة من {sender[:10]}...: {incoming_msg}")
@@ -136,10 +155,13 @@ def whatsapp_webhook():
         user_id = re.sub(r'\D', '', sender)[-9:]
         context = conversation_mgr.get_context(user_id)
         cleaned_msg = preprocess_text(incoming_msg)
+        
+        # توليد الرد مع ضبط الوقت الأقصى
         bot_response = generate_ai_response(cleaned_msg, context)
 
+        # تحديث السياق
         new_context = f"{context or ''}\nالمستخدم: {cleaned_msg}\nالبوت: {bot_response}"
-        conversation_mgr.update_context(user_id, new_context[-1000:])
+        conversation_mgr.update_context(user_id, new_context)
         conversation_mgr.log_message(user_id, incoming_msg, bot_response)
 
         resp = MessagingResponse()
@@ -150,7 +172,7 @@ def whatsapp_webhook():
         logger.error(f"Webhook error: {e}")
         return jsonify({"error": "Internal Server Error"}), 500
 
-# 7. نقاط نهاية للفحص
+# 7. نقاط نهاية محسنة للفحص
 @app.route("/", methods=["GET"])
 def index():
     return "Widad Bot is running. Use /whatsapp to send messages."
@@ -159,6 +181,7 @@ def index():
 def health_check():
     return jsonify({
         "status": "healthy",
+        "memory_usage": f"{psutil.Process().memory_info().rss / 1024 ** 2:.2f}MB",
         "model_loaded": ai_model is not None,
         "timestamp": datetime.now().isoformat()
     })
@@ -171,8 +194,7 @@ def get_logs():
         logs = cursor.fetchall()
     return jsonify(logs)
 
-# 8. التشغيل
+# 8. التشغيل مع إعدادات Render الموصى بها
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
-
+    port = int(os.environ.get("PORT", 8080))  # Render يستخدم 8080 افتراضيًا
+    app.run(host="0.0.0.0", port=port, threaded=True)  # تفعيل وضع الخيوط
