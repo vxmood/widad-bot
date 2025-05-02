@@ -19,13 +19,12 @@ logger = logging.getLogger(__name__)
 
 # 2. تحميل نموذج الذكاء الاصطناعي بذاكرة مخفضة
 @lru_cache(maxsize=1)
+@lru_cache(maxsize=1)
 def load_ai_model():
     try:
         model_name = "aubmindlab/bert-base-arabertv02-twitter"
         tokenizer = AutoTokenizer.from_pretrained(model_name)
-
-        # تحميل النموذج بنصف دقة ووضع توفير الذاكرة
-      model = AutoModelForCausalLM.from_pretrained(model_name)
+        model = AutoModelForCausalLM.from_pretrained(model_name)
 
         return pipeline(
             "text-generation",
@@ -36,7 +35,7 @@ def load_ai_model():
     except Exception as e:
         logger.error(f"Failed to load AI model: {e}")
         raise
-
+        
 # تعطيل الحساب التلقائي لتوفير الذاكرة
 torch.set_grad_enabled(False)
 ai_model = load_ai_model()
